@@ -42,35 +42,12 @@ void gravarPlaca(float lux, float temperatura, uint8_t umidade) {
   pacote[62] = checksum & 0xFF;
   pacote[63] = (checksum >> 8) & 0xFF;
 
-  prefs.begin("dados", false);
-  prefs.putBytes("pacote", pacote, TAMANHO_PACOTE);
-  prefs.end();
-}
-
-void lerPlaca() {
-  uint8_t pacote[64];
-
-  prefs.begin("dados", true);
-  prefs.getBytes("pacote", pacote, 64);
-  prefs.end();
-
-  Serial.println("Pacote lido:");
-
-  for (int i = 0; i < 64; i++) {
-      Serial.printf("%02X ", pacote[i]);
-
-      if ((i + 1) % 16 == 0) {
-          Serial.println();
-      }
-  }
+  Serial.write(pacote, TAMANHO_PACOTE);
+  delay(200);
 }
 
 float lerTemperatura(){
   float temperatura = dht.readTemperature();
-
-  // Serial.print("Temperatura: ");
-  // Serial.print(temperatura);
-  // Serial.println("°C");
 
   lcd.setCursor(0, 0); // coluna 0, linha 0
   lcd.print("T:");
@@ -86,10 +63,6 @@ float lerLuminosidade(){
   int valorluminosidade = analogRead(sensorLuz);
   long porcentagemLuminosidade = (long)valorluminosidade*100/4096;
    
-  // Serial.print("Luminosidade: ");
-  // Serial.print(porcentagemLuminosidade);
-  // Serial.println('%');
-
   float lux = converterParaLux(valorluminosidade);
 
   lcd.setCursor(0, 1); // coluna 0, linha 0
@@ -105,14 +78,6 @@ float lerLuminosidade(){
 uint8_t lerUmidade(){
   int valorUmidade = analogRead(sensorUmidade);
   uint8_t porcentagemUmidade = (4096 - valorUmidade) * 100.0 / 4096;
-
-  // Serial.print("Umidade do solo: ");
-  // Serial.print(porcentagemUmidade);
-  // Serial.println("%");
-
-  // Serial.print("valor umidade: ");
-  // Serial.println(valorUmidade);
-  // Serial.println("============================================");
 
   lcd.setCursor(10, 0); // coluna 0, linha 0
   lcd.print("U:");
@@ -136,10 +101,6 @@ float converterParaLux(int leituraLuminosidade) {
     // 3. Aproximação do valor em Lux (lm/m²) para o modelo do Tinkercad
     float lux = 500.0 / (resistenciaLDR / 1000.0);
 
-    // Exibe no Monitor Serial
-    // Serial.print("Intensidade: ");
-    // Serial.print(lux, 1);
-    // Serial.println(" lm/m² (lux)");
     delay(200);
 
     return lux;
@@ -161,7 +122,6 @@ void loop() {
   uint8_t umidade = lerUmidade();
 
   gravarPlaca(luminosidade, temperatura, umidade);
-  lerPlaca();
 
   delay(2000);
 }
