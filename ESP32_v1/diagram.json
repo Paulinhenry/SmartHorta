@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "author": "SmartHorta",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "id": "esp",
+      "type": "wokwi-esp32-devkit-v1",
+      "top": 0,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "id": "dht22",
+      "type": "wokwi-dht22",
+      "top": -80,
+      "left": 200,
+      "attrs": {}
+    },
+    {
+      "id": "ldr",
+      "type": "wokwi-photoresistor-sensor",
+      "top": -80,
+      "left": 320,
+      "attrs": {}
+    },
+    {
+      "id": "pot_umidade",
+      "type": "wokwi-potentiometer",
+      "top": 120,
+      "left": 320,
+      "attrs": { "label": "Umidade do solo (simulada)" }
+    },
+    {
+      "id": "lcd1",
+      "type": "wokwi-lcd1602",
+      "top": 120,
+      "left": -220,
+      "attrs": { "pins": "i2c" }
+    }
+  ],
+  "connections": [
+    ["esp:D4", "dht22:SDA", "green", []],
+    ["dht22:VCC", "esp:3V3", "red", []],
+    ["dht22:GND", "esp:GND.1", "black", []],
+
+    ["esp:VP", "ldr:AOUT", "green", []],
+    ["ldr:VCC", "esp:3V3", "red", []],
+    ["ldr:GND", "esp:GND.2", "black", []],
+
+    ["esp:VN", "pot_umidade:SIG", "green", []],
+    ["pot_umidade:VCC", "esp:3V3", "red", []],
+    ["pot_umidade:GND", "esp:GND.3", "black", []],
+
+    ["esp:D21", "lcd1:SDA", "green", []],
+    ["esp:D22", "lcd1:SCL", "yellow", []],
+    ["lcd1:VCC", "esp:5V", "red", []],
+    ["lcd1:GND", "esp:GND.4", "black", []]
+  ]
+}

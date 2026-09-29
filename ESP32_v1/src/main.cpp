@@ -2,8 +2,10 @@
 #include <Arduino.h>
 #include <DHT.h>
 #include <DHT_U.h>
+#include <HTTPClient.h>
 #include <LiquidCrystal_I2C.h>
 #include <Preferences.h>
+#include <WiFi.h>
 #include <Wire.h>
 
 #define sensorLuz 36
@@ -11,69 +13,108 @@
 #define sensorTemperatura 4
 #define DHTTYPE DHT22
 
-// ============================================================
-// Configuração do canteiro
-// Altere este valor para cada ESP32 diferente (ex: "A1", "B1")
-// ============================================================
+// Altere para cada ESP32 diferente (ex: "A1", "B1")
 const char CANTEIRO_ID[3] = "A1";
 
 const float resistorReferencia = 10000.0;
 
+const char *WIFI_SSID = "Wife_Santos 2.4G";
+const char *WIFI_PASSWORD = "phph2224";
+
+// Ajustar para o IP real do Machbase (local ou nuvem)
+const char *MACHBASE_URL = "http://IP_DO_MACHBASE:5654/db/query";
+
 float converterParaLux(int leituraLuminosidade);
-void gravarPlaca(float lux, float temperatura, uint8_t umidade);
+void enviarLeituras(float lux, float temperatura, uint8_t umidade);
+bool inserirNoMachbase(const String &sensorId, float valor,
+                        const char *variavel, const char *unidade);
+void conectarWifi();
 
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 DHT dht(sensorTemperatura, DHTTYPE);
 Preferences prefs;
 
 // ============================================================
-// Monta e envia o pacote de 64 bytes via Serial
-//
-// Layout do pacote:
-//   Bytes 0-3  : Header mágico (0xAA 0xBB 0xCC 0xDD)
-//   Bytes 4-5  : Canteiro ID em ASCII (ex: 'A', '1')
-//   Bytes 10-13: Luminosidade (float, 4 bytes, little-endian)
-//   Bytes 14-17: Temperatura  (float, 4 bytes, little-endian)
-//   Byte  18   : Umidade      (uint8_t, 1 byte)
-//   Bytes 62-63: Checksum     (uint16_t, little-endian)
+// Conecta (ou reconecta) ao Wi-Fi
 // ============================================================
-void gravarPlaca(float lux, float temperatura, uint8_t umidade) {
-  const int TAMANHO_PACOTE = 64;
-  uint8_t pacote[TAMANHO_PACOTE] = {0};
+void conectarWifi() {
+  if (WiFi.status() == WL_CONNECTED) return;
 
-  // Header mágico
-  pacote[0] = 0xAA;
-  pacote[1] = 0xBB;
-  pacote[2] = 0xCC;
-  pacote[3] = 0xDD;
+  Serial.print("Conectando ao Wi-Fi");
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-  // Canteiro ID (2 bytes ASCII)
-  pacote[4] = CANTEIRO_ID[0];
-  pacote[5] = CANTEIRO_ID[1];
-
-  // Dados dos sensores
-  memcpy(&pacote[10], &lux, sizeof(float));
-  memcpy(&pacote[14], &temperatura, sizeof(float));
-  pacote[18] = umidade;
-
-  // Checksum (soma de todos os bytes exceto os 2 últimos)
-  uint16_t checksum = 0;
-
-  for (int i = 0; i < TAMANHO_PACOTE - 2; i++) {
-    checksum += pacote[i];
+  unsigned long inicio = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - inicio < 15000) {
+    delay(500);
+    Serial.print(".");
   }
 
-  pacote[62] = checksum & 0xFF;
-  pacote[63] = (checksum >> 8) & 0xFF;
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWi-Fi conectado! IP: " + WiFi.localIP().toString());
+  } else {
+    Serial.println("\nFalha ao conectar no Wi-Fi.");
+  }
+}
 
-  Serial.write(pacote, TAMANHO_PACOTE);
-  delay(200);
+// ============================================================
+// Envia uma leitura individual pro Machbase via HTTP POST,
+// no mesmo formato de INSERT que o gravadorSerial.py usava
+// ============================================================
+bool inserirNoMachbase(const String &sensorId, float valor,
+                        const char *variavel, const char *unidade) {
+  if (WiFi.status() != WL_CONNECTED) return false;
+
+  HTTPClient http;
+  http.begin(MACHBASE_URL);
+  http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+  http.setTimeout(5000);
+
+  // Timestamp via NOW() — ESP32 não tem RTC confiável sem NTP
+  String query = "INSERT INTO leituras (NAME, TIME, VALOR, CANTEIRO_ID, VARIAVEL, UNIDADE) "
+                 "VALUES ('" + sensorId + "', NOW(), " + String(valor, 4) +
+                 ", '" + String(CANTEIRO_ID) + "', '" + variavel + "', '" + unidade + "')";
+
+  String body = "q=" + query;
+  int codigo = http.POST(body);
+
+  bool ok = (codigo == 200);
+  if (!ok) {
+    Serial.println("  ERRO MACHBASE [" + sensorId + "]: HTTP " + String(codigo));
+  }
+
+  http.end();
+  return ok;
+}
+
+void enviarLeituras(float lux, float temperatura, uint8_t umidade) {
+  conectarWifi();
+
+  String sensorLuzId = "LUZ-" + String(CANTEIRO_ID) + "-01";
+  String sensorTmpId = "TMP-" + String(CANTEIRO_ID) + "-01";
+  String sensorUmiId = "UMI-" + String(CANTEIRO_ID) + "-01";
+
+  bool okLuz = inserirNoMachbase(sensorLuzId, lux, "luminosidade", "lux");
+  bool okTmp = inserirNoMachbase(sensorTmpId, temperatura, "temperatura", "C");
+  bool okUmi = inserirNoMachbase(sensorUmiId, (float)umidade, "umidade_solo", "%");
+
+  Serial.printf("Luz:%s Temp:%s Umidade:%s\n",
+                okLuz ? "OK" : "FALHOU",
+                okTmp ? "OK" : "FALHOU",
+                okUmi ? "OK" : "FALHOU");
 }
 
 float lerTemperatura() {
   float temperatura = dht.readTemperature();
 
-  lcd.setCursor(0, 0); // coluna 0, linha 0
+  // DHT pode retornar NaN em caso de falha de leitura
+  if (isnan(temperatura)) {
+    Serial.println("ERRO: Falha ao ler DHT22");
+    lcd.setCursor(0, 0);
+    lcd.print("T: ERRO   ");
+    return -1;
+  }
+
+  lcd.setCursor(0, 0);
   lcd.print("T:");
   lcd.print(temperatura);
   lcd.print("C ");
@@ -85,11 +126,9 @@ float lerTemperatura() {
 
 float lerLuminosidade() {
   int valorluminosidade = analogRead(sensorLuz);
-  long porcentagemLuminosidade = (long)valorluminosidade * 100 / 4096;
-
   float lux = converterParaLux(valorluminosidade);
 
-  lcd.setCursor(0, 1); // coluna 0, linha 1
+  lcd.setCursor(0, 1);
   lcd.print("L:");
   lcd.print(lux);
   lcd.print("lux ");
@@ -103,10 +142,9 @@ uint8_t lerUmidade() {
   int valorUmidade = analogRead(sensorUmidade);
   uint8_t porcentagemUmidade = (4096 - valorUmidade) * 100.0 / 4096;
 
-  lcd.setCursor(10, 0); // coluna 10, linha 0
+  lcd.setCursor(10, 0);
   lcd.print("U:");
   lcd.print(porcentagemUmidade);
-
   lcd.print("% ");
 
   delay(200);
@@ -116,17 +154,9 @@ uint8_t lerUmidade() {
 
 float converterParaLux(int leituraLuminosidade) {
   if (leituraLuminosidade > 0) {
-    // 1. Calcula a tensão lida no pino A0
     float tensao = leituraLuminosidade * (5.0 / 4096.0);
-
-    // 2. Calcula a resistência do LDR em ohms
     float resistenciaLDR = resistorReferencia * (5 / tensao - 1.0);
-
-    // 3. Aproximação do valor em Lux (lm/m²) para o modelo do Tinkercad
     float lux = 500.0 / (resistenciaLDR / 1000.0);
-
-    delay(200);
-
     return lux;
   }
   return 0.0;
@@ -138,14 +168,21 @@ void setup() {
   dht.begin();
   lcd.init();
   lcd.backlight();
+
+  conectarWifi();
 }
 
 void loop() {
+  lcd.clear();
+
   float temperatura = lerTemperatura();
   float luminosidade = lerLuminosidade();
   uint8_t umidade = lerUmidade();
 
-  gravarPlaca(luminosidade, temperatura, umidade);
+  // Não envia dados se a temperatura falhou (sentinela -1)
+  if (temperatura >= 0) {
+    enviarLeituras(luminosidade, temperatura, umidade);
+  }
 
   delay(2000);
 }
