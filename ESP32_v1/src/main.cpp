@@ -7,6 +7,9 @@
 #include <Preferences.h>
 #include <WiFi.h>
 #include <Wire.h>
+#include <time.h>
+#include "esp_wpa2.h"
+#include <esp_wifi.h>
 
 #define sensorLuz 36
 #define sensorUmidade 39
@@ -18,11 +21,12 @@ const char CANTEIRO_ID[3] = "A1";
 
 const float resistorReferencia = 10000.0;
 
-const char *WIFI_SSID = "Wife_Santos 2.4G";
-const char *WIFI_PASSWORD = "phph2224";
+const char *WIFI_SSID = "Galaxy A53 5G95B9";
+const char *WIFI_USER = ""; // Usuário/E-mail da rede empresarial/faculdade
+const char *WIFI_PASSWORD = "abcdefgh";
 
 // Ajustar para o IP real do Machbase (local ou nuvem)
-const char *MACHBASE_URL = "http://IP_DO_MACHBASE:5654/db/query";
+const char *MACHBASE_URL = "http://172.29.110.58:5654/db/query";
 
 float converterParaLux(int leituraLuminosidade);
 void enviarLeituras(float lux, float temperatura, uint8_t umidade);
@@ -35,16 +39,30 @@ DHT dht(sensorTemperatura, DHTTYPE);
 Preferences prefs;
 
 // ============================================================
-// Conecta (ou reconecta) ao Wi-Fi
+// Conecta (ou reconecta) ao Wi-Fi (Suporta Wi-Fi comum e WPA2 Enterprise)
 // ============================================================
 void conectarWifi() {
   if (WiFi.status() == WL_CONNECTED) return;
 
-  Serial.print("Conectando ao Wi-Fi");
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_STA);
+
+  // Se a variável WIFI_USER estiver preenchida, usa WPA2-Enterprise (redes de faculdade/empresa).
+  // Se estiver vazia (""), usa conexão Wi-Fi padrão (roteador/roteador do celular).
+  if (strlen(WIFI_USER) > 0) {
+    Serial.println("Conectando ao Wi-Fi (WPA2 Enterprise)...");
+    esp_wifi_sta_wpa2_ent_set_identity((uint8_t *)WIFI_USER, strlen(WIFI_USER));
+    esp_wifi_sta_wpa2_ent_set_username((uint8_t *)WIFI_USER, strlen(WIFI_USER));
+    esp_wifi_sta_wpa2_ent_set_password((uint8_t *)WIFI_PASSWORD, strlen(WIFI_PASSWORD));
+    esp_wifi_sta_wpa2_ent_enable();
+    WiFi.begin(WIFI_SSID);
+  } else {
+    Serial.println("Conectando ao Wi-Fi convencional...");
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  }
 
   unsigned long inicio = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - inicio < 15000) {
+  while (WiFi.status() != WL_CONNECTED && millis() - inicio < 20000) {
     delay(500);
     Serial.print(".");
   }
@@ -54,6 +72,23 @@ void conectarWifi() {
   } else {
     Serial.println("\nFalha ao conectar no Wi-Fi.");
   }
+}
+
+String urlEncode(const String &str) {
+  String encoded = "";
+  for (size_t i = 0; i < str.length(); i++) {
+    char c = str.charAt(i);
+    if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+      encoded += c;
+    } else if (c == ' ') {
+      encoded += '+';
+    } else {
+      char buf[4];
+      sprintf(buf, "%%%02X", (unsigned char)c);
+      encoded += buf;
+    }
+  }
+  return encoded;
 }
 
 // ============================================================
@@ -69,17 +104,27 @@ bool inserirNoMachbase(const String &sensorId, float valor,
   http.addHeader("Content-Type", "application/x-www-form-urlencoded");
   http.setTimeout(5000);
 
-  // Timestamp via NOW() — ESP32 não tem RTC confiável sem NTP
+  // Obtem timestamp real via NTP (mesmo formato do gravadorSerial.py)
+  struct tm timeinfo;
+  char timestamp[20];
+  if (getLocalTime(&timeinfo)) {
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &timeinfo);
+  } else {
+    Serial.println("  AVISO: Hora NTP indisponivel, usando fallback");
+    strcpy(timestamp, "1970-01-01 00:00:00");
+  }
+
   String query = "INSERT INTO leituras (NAME, TIME, VALOR, CANTEIRO_ID, VARIAVEL, UNIDADE) "
-                 "VALUES ('" + sensorId + "', NOW(), " + String(valor, 4) +
+                 "VALUES ('" + sensorId + "', TO_DATE('" + String(timestamp) + "', 'YYYY-MM-DD HH24:MI:SS'), " + String(valor, 4) +
                  ", '" + String(CANTEIRO_ID) + "', '" + variavel + "', '" + unidade + "')";
 
-  String body = "q=" + query;
+  String body = "q=" + urlEncode(query);
   int codigo = http.POST(body);
 
   bool ok = (codigo == 200);
   if (!ok) {
-    Serial.println("  ERRO MACHBASE [" + sensorId + "]: HTTP " + String(codigo));
+    String resposta = http.getString();
+    Serial.println("  ERRO MACHBASE [" + sensorId + "]: HTTP " + String(codigo) + " -> " + resposta);
   }
 
   http.end();
@@ -170,6 +215,24 @@ void setup() {
   lcd.backlight();
 
   conectarWifi();
+
+  // Sincroniza relógio via NTP (UTC-3 = Brasília)
+  configTime(-3 * 3600, 0, "pool.ntp.org", "time.nist.gov");
+  Serial.print("Sincronizando NTP");
+  struct tm timeinfo;
+  int tentativas = 0;
+  while (!getLocalTime(&timeinfo) && tentativas < 10) {
+    Serial.print(".");
+    delay(1000);
+    tentativas++;
+  }
+  if (tentativas < 10) {
+    char buf[20];
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
+    Serial.println("\nHora sincronizada: " + String(buf));
+  } else {
+    Serial.println("\nFalha ao sincronizar NTP.");
+  }
 }
 
 void loop() {
